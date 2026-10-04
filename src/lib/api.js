@@ -79,3 +79,20 @@ export async function downloadBackup() {
   link.remove()
   URL.revokeObjectURL(url)
 }
+
+export async function downloadScheduledBackup() {
+  const response = await fetch(`${API}?action=scheduled_backup_download`, { credentials: 'include' })
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}))
+    throw new Error(body.error || 'Scheduled backup download failed')
+  }
+  const blob = await response.blob()
+  const url = URL.createObjectURL(blob)
+  const link = document.createElement('a')
+  link.href = url
+  link.download = `eduvault-scheduled-backup-${new Date().toISOString().slice(0, 10)}.zip`
+  document.body.appendChild(link)
+  link.click()
+  link.remove()
+  URL.revokeObjectURL(url)
+}

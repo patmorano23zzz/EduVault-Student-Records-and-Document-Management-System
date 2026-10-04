@@ -77,20 +77,29 @@ export function useUploadDocument() {
         })
       if (uploadError) throw uploadError
 
-      const { error: dbError } = await supabase.from('documents').insert({
-        student_id: studentId,
-        type_id: typeId,
-        title,
-        school_year: schoolYear,
-        grade_level: gradeLevel,
-        storage_path: uploadData.path,
-        file_name: file.name,
-        mime_type: file.type,
-        file_size: file.size,
-        uploaded_by: profile?.id,
-        is_classified: isClassified,
-      })
-      if (dbError) throw dbError
+      try {
+        const { error: dbError } = await supabase.from('documents').insert({
+          student_id: studentId,
+          type_id: typeId,
+          title,
+          school_year: schoolYear,
+          grade_level: gradeLevel,
+          storage_path: uploadData.path,
+          file_name: file.name,
+          mime_type: file.type,
+          file_size: file.size,
+          uploaded_by: profile?.id,
+          is_classified: isClassified,
+        })
+        if (dbError) throw dbError
+      } catch (error) {
+        try {
+          await supabase.storage.from('student-files').remove([uploadData.path])
+        } catch (cleanupError) {
+          throw new Error(`${error.message} (Uploaded file cleanup also failed: ${cleanupError.message})`)
+        }
+        throw error
+      }
     },
     onSuccess: () => qc.invalidateQueries({ queryKey: KEY }),
   })

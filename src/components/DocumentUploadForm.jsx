@@ -3,9 +3,9 @@ import { Loader2, UploadCloud } from 'lucide-react'
 import { useDocumentTypes, useUploadDocument } from '../hooks/useDocuments'
 import AlertMessage from './ui/AlertMessage'
 
-const MAX_MB = 20
+const MAX_MB = 10
 
-export default function DocumentUploadForm({ studentId, onSuccess, onCancel }) {
+export default function DocumentUploadForm({ studentId, onSuccess, onCancel, allowClassification = true }) {
   const { data: types = [] } = useDocumentTypes()
   const upload = useUploadDocument()
 
@@ -90,11 +90,13 @@ export default function DocumentUploadForm({ studentId, onSuccess, onCancel }) {
         </div>
       </div>
 
-      <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
-        <input type="checkbox" checked={isClassified} onChange={e => setIsClassified(e.target.checked)}
-          className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
-        Mark as classified (hidden from teachers)
-      </label>
+      {allowClassification && (
+        <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+          <input type="checkbox" checked={isClassified} onChange={e => setIsClassified(e.target.checked)}
+            className="rounded border-gray-300 text-blue-600 focus:ring-blue-500" />
+          Mark as classified (hidden from teachers)
+        </label>
+      )}
 
       {error && <AlertMessage>{error}</AlertMessage>}
 

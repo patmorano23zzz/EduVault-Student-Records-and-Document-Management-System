@@ -13,6 +13,7 @@ if ($_SERVER['REQUEST_METHOD'] === 'OPTIONS') exit;
 if (empty($_SESSION['csrf'])) $_SESSION['csrf'] = bin2hex(random_bytes(24));
 setcookie('csrf', $_SESSION['csrf'], ['secure'=>!empty($_SERVER['HTTPS']), 'httponly'=>false, 'samesite'=>'Lax', 'path'=>'/']);
 if (is_file(__DIR__.'/config.local.php')) require __DIR__.'/config.local.php'; else require __DIR__.'/config.php';
+require_once __DIR__.'/backup.php';
 $pdo = null;
 try { $pdo = new PDO('mysql:host='.DB_HOST.';port='.DB_PORT.';dbname='.DB_NAME.';charset=utf8mb4', DB_USER, DB_PASS, [PDO::ATTR_ERRMODE=>PDO::ERRMODE_EXCEPTION, PDO::ATTR_DEFAULT_FETCH_MODE=>PDO::FETCH_ASSOC]); } catch (Throwable $e) { error_log('Database connection failed: '.$e->getMessage()); http_response_code(503); echo json_encode(['error'=>'Database connection failed. Check api/config.local.php and the MySQL service.']); exit; }
 function out(mixed $data, int $code=200): never { http_response_code($code); echo json_encode($data); exit; }
@@ -65,8 +66,149 @@ function safeStoragePath(string $path): string {
   return $path;
 }
 function filters(array $f, array &$where, array &$args): void { foreach ($f as $key=>$value) if (str_starts_with((string)$key,'eq[')) { $col=substr($key,3,-1); if (preg_match('/^[a-z_]+$/',$col)) { $where[]="`$col` = ?"; $args[]=$value; } } }
+function teacherCanAccessStudent(string $teacherId, string $studentId): bool {
+  global $pdo;
+  $stmt=$pdo->prepare('SELECT 1 FROM students s JOIN teacher_assignments a ON a.grade_level=s.grade_level AND COALESCE(a.section,"")=COALESCE(s.section,"") WHERE s.id=? AND a.teacher_id=?');
+  $stmt->execute([$studentId,$teacherId]);
+  return (bool)$stmt->fetchColumn();
+}
 $method=$_SERVER['REQUEST_METHOD']; $input=body(); $action=$_GET['action']??($input['action']??null);
 if ($method==='POST' && !in_array($action, ['login','logout'], true) && (($input['rpc']??'') !== 'get_login_email') && (($_SERVER['HTTP_X_CSRF_TOKEN']??'') !== $_SESSION['csrf'])) out(['error'=>'Invalid CSRF token'],419);
+if ($method==='POST' && $action==='bulk_import') {
+  requireAuth('admin');
+  $type=(string)($input['type']??'');
+  $rows=$input['rows']??null;
+  if(!in_array($type,['students','teachers'],true) || !is_array($rows) || !$rows) out(['error'=>'Choose a supported import type and include at least one CSV row'],422);
+  if(count($rows)>500) out(['error'=>'Import is limited to 500 rows per upload'],422);
+  $results=[];
+  foreach($rows as $index=>$row) {
+    $rowNumber=$index+2;
+    if(!is_array($row)) {
+      $results[]=['row'=>$rowNumber,'ok'=>false,'error'=>'Invalid CSV row'];
+      continue;
+    }
+    if($type==='teachers') {
+      $staffId=strtoupper(trim((string)($row['staff_id']??'')));
+      $name=trim((string)($row['full_name']??''));
+      $email=trim((string)($row['email']??''));
+      $password=(string)($row['password']??'');
+      if(!preg_match('/^[A-Z0-9-]{2,50}$/',$staffId)) $error='Staff ID must be 2-50 letters, numbers, or hyphens';
+      elseif($name==='') $error='Full name is required';
+      elseif(strlen($name)>190) $error='Full name must be 190 characters or fewer';
+      elseif(!filter_var($email,FILTER_VALIDATE_EMAIL)) $error='A valid email is required';
+      elseif(strlen($email)>190) $error='Email must be 190 characters or fewer';
+      elseif(strlen($password)<8) $error='Password must be at least 8 characters';
+      else $error=null;
+      if($error!==null) {
+        $results[]=['row'=>$rowNumber,'ok'=>false,'error'=>$error];
+        continue;
+      }
+      try {
+        $stmt=$pdo->prepare("INSERT INTO profiles (id,staff_id,email,password_hash,full_name,role,is_active) VALUES (?,?,?,?,?,'teacher',1)");
+        $stmt->execute([uuid(),$staffId,$email,password_hash($password,PASSWORD_DEFAULT),$name]);
+        $results[]=['row'=>$rowNumber,'ok'=>true,'label'=>$staffId];
+      } catch(PDOException $e) {
+        if((int)($e->errorInfo[1]??0)===1062) {
+          $results[]=['row'=>$rowNumber,'ok'=>false,'error'=>'Staff ID or email already exists'];
+          continue;
+        }
+        throw $e;
+      }
+      continue;
+    }
+
+    $student=[
+      'id'=>uuid(),
+      'lrn'=>trim((string)($row['lrn']??'')),
+      'last_name'=>trim((string)($row['last_name']??'')),
+      'first_name'=>trim((string)($row['first_name']??'')),
+      'middle_name'=>trim((string)($row['middle_name']??'')) ?: null,
+      'birth_date'=>trim((string)($row['birth_date']??'')) ?: null,
+      'sex'=>strtoupper(trim((string)($row['sex']??''))) ?: null,
+      'grade_level'=>trim((string)($row['grade_level']??'')),
+      'section'=>trim((string)($row['section']??'')) ?: null,
+      'guardian_name'=>trim((string)($row['guardian_name']??'')) ?: null,
+      'status'=>strtolower(trim((string)($row['status']??'enrolled'))) ?: 'enrolled',
+    ];
+    if($student['lrn']==='') $error='LRN is required';
+    elseif(strlen($student['lrn'])>64) $error='LRN must be 64 characters or fewer';
+    elseif($student['last_name']==='') $error='Last name is required';
+    elseif(strlen($student['last_name'])>100) $error='Last name must be 100 characters or fewer';
+    elseif($student['first_name']==='') $error='First name is required';
+    elseif(strlen($student['first_name'])>100) $error='First name must be 100 characters or fewer';
+    elseif($student['middle_name']!==null && strlen($student['middle_name'])>100) $error='Middle name must be 100 characters or fewer';
+    elseif(!in_array($student['grade_level'],['Kinder','Grade 1','Grade 2','Grade 3','Grade 4','Grade 5','Grade 6'],true)) $error='Grade level must be Kinder or Grade 1-6';
+    elseif($student['section']!==null && strlen($student['section'])>100) $error='Section must be 100 characters or fewer';
+    elseif($student['guardian_name']!==null && strlen($student['guardian_name'])>190) $error='Guardian name must be 190 characters or fewer';
+    elseif($student['sex']!==null && !in_array($student['sex'],['M','F'],true)) $error='Sex must be M, F, or blank';
+    elseif(!in_array($student['status'],['enrolled','transferred','graduated','dropped'],true)) $error='Status must be enrolled, transferred, graduated, or dropped';
+    elseif($student['birth_date']!==null && (!preg_match('/^\d{4}-\d{2}-\d{2}$/',$student['birth_date']) || !checkdate((int)substr($student['birth_date'],5,2),(int)substr($student['birth_date'],8,2),(int)substr($student['birth_date'],0,4)))) $error='Birth date must be a valid YYYY-MM-DD date';
+    else $error=null;
+    if($error!==null) {
+      $results[]=['row'=>$rowNumber,'ok'=>false,'error'=>$error];
+      continue;
+    }
+    try {
+      $columns=array_keys($student);
+      $stmt=$pdo->prepare('INSERT INTO students (`'.implode('`,`',$columns).'`) VALUES ('.implode(',',array_fill(0,count($columns),'?')).')');
+      $stmt->execute(array_values($student));
+      $results[]=['row'=>$rowNumber,'ok'=>true,'label'=>$student['lrn']];
+    } catch(PDOException $e) {
+      if((int)($e->errorInfo[1]??0)===1062) {
+        $results[]=['row'=>$rowNumber,'ok'=>false,'error'=>'LRN already exists'];
+        continue;
+      }
+      throw $e;
+    }
+  }
+  out(['data'=>['results'=>$results,'imported'=>count(array_filter($results,static fn(array $result): bool => $result['ok'])),'failed'=>count(array_filter($results,static fn(array $result): bool => !$result['ok']))]]);
+}
+if ($action==='backup_schedule_status') {
+  requireAuth('admin');
+  try {
+    $schedule=$pdo->query('SELECT enabled,frequency,run_time,day_of_week,day_of_month,next_run_at,last_run_at,last_file,last_error FROM backup_schedule WHERE id=1')->fetch();
+  } catch(PDOException $error) {
+    error_log('Backup schedule lookup failed: '.$error->getMessage());
+    out(['error'=>'Backup scheduling is not initialized. Import database/backup-schedule-migration.sql once.'],503);
+  }
+  if(!$schedule) out(['error'=>'Backup schedule is not initialized. Import database/backup-schedule-migration.sql once.'],503);
+  $timezone=new DateTimeZone('Asia/Manila');
+  foreach(['next_run_at','last_run_at'] as $field) {
+    $schedule[$field]=$schedule[$field]
+      ? (new DateTimeImmutable($schedule[$field],$timezone))->format(DATE_ATOM)
+      : null;
+  }
+  out(['data'=>$schedule+['timezone'=>'Asia/Manila']]);
+}
+if ($method==='POST' && $action==='backup_schedule_save') {
+  $admin=requireAuth('admin');
+  $frequency=(string)($input['frequency']??'');
+  $runTime=(string)($input['run_time']??'');
+  $dayOfWeek=(int)($input['day_of_week']??1);
+  $dayOfMonth=(int)($input['day_of_month']??1);
+  $enabled=!empty($input['enabled'])?1:0;
+  if(!in_array($frequency,['daily','weekly','monthly'],true) || !preg_match('/^(?:[01]\d|2[0-3]):[0-5]\d$/',$runTime)) out(['error'=>'Choose a valid frequency and time'],422);
+  if($dayOfWeek<1 || $dayOfWeek>7 || $dayOfMonth<1 || $dayOfMonth>31) out(['error'=>'Choose a valid day for the selected schedule'],422);
+  $nextRun=$enabled?backupNextRun($frequency,$runTime.':00',$dayOfWeek,$dayOfMonth):null;
+  $stmt=$pdo->prepare("INSERT INTO backup_schedule (id,enabled,frequency,run_time,day_of_week,day_of_month,next_run_at,updated_by) VALUES (1,?,?,?,?,?,?,?) ON DUPLICATE KEY UPDATE enabled=VALUES(enabled),frequency=VALUES(frequency),run_time=VALUES(run_time),day_of_week=VALUES(day_of_week),day_of_month=VALUES(day_of_month),next_run_at=VALUES(next_run_at),last_error=NULL,updated_by=VALUES(updated_by)");
+  $stmt->execute([$enabled,$frequency,$runTime.':00',$dayOfWeek,$dayOfMonth,$nextRun?$nextRun->format('Y-m-d H:i:s'):null,$admin['id']]);
+  out(['data'=>true]);
+}
+if ($action==='scheduled_backup_download') {
+  requireAuth('admin');
+  $schedule=$pdo->query('SELECT last_file FROM backup_schedule WHERE id=1')->fetch();
+  if(!$schedule || !$schedule['last_file']) out(['error'=>'No scheduled backup is available yet'],404);
+  $relativePath=trim(str_replace('\\','/',$schedule['last_file']),'/');
+  if($relativePath!=='backups/latest.zip') out(['error'=>'Scheduled backup path is invalid'],500);
+  $file=realpath(STORAGE_ROOT.'/'.$relativePath);
+  $root=realpath(STORAGE_ROOT);
+  if(!$file || !$root || !str_starts_with($file,$root.DIRECTORY_SEPARATOR) || !is_file($file)) out(['error'=>'Scheduled backup file is missing'],404);
+  header('Content-Type: application/zip');
+  header('Content-Disposition: attachment; filename="eduvault-scheduled-backup-'.date('Y-m-d').'.zip"');
+  header('Content-Length: '.filesize($file));
+  readfile($file);
+  exit;
+}
 if ($action==='recovery_email_status') {
   $admin=requireAuth('admin');
   $stmt=$pdo->prepare('SELECT recovery_email,verified_at,pending_email FROM admin_recovery_settings WHERE admin_id=?');
@@ -177,10 +319,12 @@ if ($action==='backup_download') {
   exit;
 }
 if ($action==='upload' && !empty($_FILES['file']) && isset($_POST['student_id'], $_POST['type_id'])) {
-  requireAuth('admin');
+  $u=requireAuth();
   if ($_FILES['file']['error'] !== UPLOAD_ERR_OK) out(['error'=>'File upload failed'],422);
   if ((int)$_FILES['file']['size'] > 10 * 1024 * 1024) out(['error'=>'Maximum file size is 10 MB on shared hosting'],422);
-  $student=$pdo->prepare('SELECT lrn,last_name,first_name FROM students WHERE id=?');
+  $studentId=(string)$_POST['student_id'];
+  if ($u['role']==='teacher' && !teacherCanAccessStudent($u['id'],$studentId)) out(['error'=>'You are not assigned to this student'],403);
+  $student=$pdo->prepare('SELECT id,lrn,last_name,first_name,grade_level FROM students WHERE id=?');
   $student->execute([$_POST['student_id']]);
   $student=$student->fetch();
   $type=$pdo->prepare('SELECT code FROM document_types WHERE id=?');
@@ -191,7 +335,7 @@ if ($action==='upload' && !empty($_FILES['file']) && isset($_POST['student_id'],
   $year=$clean((string)($_POST['school_year']??'' ?: 'unspecified'));
   $folder=$clean($student['last_name'].'_'.$student['first_name'].'_'.$student['lrn']);
   $name=$clean(basename((string)$_FILES['file']['name']));
-  $path=safeStoragePath($year.'/'.$clean((string)$typeCode).'/'.$folder.'/'.date('Ymd_His').'_'.bin2hex(random_bytes(3)).'_'.$name);
+  $path=safeStoragePath($student['id'].'/'.$year.'/'.$clean((string)$typeCode).'/'.$folder.'/'.date('Ymd_His').'_'.bin2hex(random_bytes(3)).'_'.$name);
   $target=STORAGE_ROOT.'/'.$path;
   if (!is_dir(dirname($target)) && !mkdir(dirname($target),0700,true)) out(['error'=>'Could not create storage directory'],500);
   if (!move_uploaded_file($_FILES['file']['tmp_name'],$target)) out(['error'=>'Could not save file'],500);
@@ -201,12 +345,27 @@ if ($action==='session') { $sessionUser=user(); if ($sessionUser) $sessionUser=r
 if ($action==='download') { $u=requireAuth(); $path=safeStoragePath($_GET['path']??''); $stmt=$pdo->prepare('SELECT storage_path,file_name,mime_type FROM documents WHERE storage_path=?'); $stmt->execute([$path]); $doc=$stmt->fetch(); if(!$doc) out(['error'=>'Not found'],404); if($u['role']!=='admin') { $q=$pdo->prepare('SELECT 1 FROM documents d JOIN students s ON s.id=d.student_id JOIN teacher_assignments a ON a.teacher_id=? AND a.grade_level=s.grade_level AND COALESCE(a.section,"")=COALESCE(s.section,"") WHERE d.storage_path=? AND d.is_classified=0'); $q->execute([$u['id'], $path]); if(!$q->fetchColumn()) out(['error'=>'Forbidden'],403); } $file=realpath(STORAGE_ROOT.'/'.$path); $root=realpath(STORAGE_ROOT); if(!$file || !$root || !str_starts_with($file, $root.DIRECTORY_SEPARATOR) || !is_file($file)) out(['error'=>'Not found'],404); header('Content-Type: '.($doc['mime_type'] ?: 'application/octet-stream')); header('Content-Disposition: attachment; filename="'.basename($doc['file_name']).'"'); readfile($file); exit; }
 if ($action==='upload') { requireAuth('admin'); if(empty($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) out(['error'=>'File upload failed'],422); if((int)$_FILES['file']['size'] > 10 * 1024 * 1024) out(['error'=>'Maximum file size is 10 MB on shared hosting'],422); $requested=$_POST['path']??(uuid().'/'.basename($_FILES['file']['name'])); $requested=str_replace('\\','/',(string)$requested); $parts=explode('/',trim($requested,'/')); $fileName=preg_replace('/[^A-Za-z0-9._-]/','_',basename(end($parts))); $parts[count($parts)-1]=$fileName; $path=safeStoragePath(implode('/',$parts)); $target=STORAGE_ROOT.'/'.$path; if(!is_dir(dirname($target)) && !mkdir(dirname($target),0700,true)) out(['error'=>'Could not create storage directory'],500); if(!move_uploaded_file($_FILES['file']['tmp_name'],$target)) out(['error'=>'Could not save file'],500); out(['data'=>['path'=>$path]]); }
 if ($action==='logout') { session_destroy(); out(['data'=>true]); }
-if ($action==='delete_file') { requireAuth('admin'); foreach (($input['paths']??[]) as $path) { $file=STORAGE_ROOT.'/'.safeStoragePath((string)$path); if (is_file($file)) unlink($file); } out(['data'=>true]); }
+if ($action==='delete_file') {
+  $u=requireAuth();
+  foreach (($input['paths']??[]) as $path) {
+    $safePath=safeStoragePath((string)$path);
+    if($u['role']!=='admin') {
+      $studentId=explode('/',$safePath,2)[0];
+      if(!teacherCanAccessStudent($u['id'],$studentId)) out(['error'=>'You are not assigned to this student'],403);
+      $documentCheck=$pdo->prepare('SELECT 1 FROM documents WHERE storage_path=?');
+      $documentCheck->execute([$safePath]);
+      if($documentCheck->fetchColumn()) out(['error'=>'Teachers cannot delete stored documents'],403);
+    }
+    $file=STORAGE_ROOT.'/'.$safePath;
+    if(is_file($file) && !unlink($file)) out(['error'=>'Could not remove uploaded file'],500);
+  }
+  out(['data'=>true]);
+}
 if ($action==='reset_teacher_password') { requireAuth('admin'); $teacherId=(string)($input['teacher_id']??''); $password=(string)($input['password']??''); if ($teacherId==='' || strlen($password)<8) out(['error'=>'A teacher and a password of at least 8 characters are required'],422); $s=$pdo->prepare("UPDATE profiles SET password_hash=? WHERE id=? AND role='teacher'"); $s->execute([password_hash($password,PASSWORD_DEFAULT),$teacherId]); if ($s->rowCount()!==1) out(['error'=>'Teacher account not found'],404); out(['data'=>true]); }
 if ($action==='create_teacher' || $action==='create-teacher') { requireAuth('admin'); $staffId=strtoupper(trim((string)($input['staff_id']??($input['user_metadata']['staff_id']??'')))); $email=trim((string)($input['email']??'')); $password=(string)($input['password']??''); $name=trim((string)($input['full_name']??($input['user_metadata']['full_name']??''))); if(!preg_match('/^[A-Z0-9-]{2,50}$/',$staffId)||!filter_var($email,FILTER_VALIDATE_EMAIL)||strlen($password)<8||$name==='') out(['error'=>'Valid staff ID, email, name, and password (8+ characters) are required'],422); $id=bin2hex(random_bytes(16)); try { $s=$pdo->prepare("INSERT INTO profiles (id,staff_id,email,password_hash,full_name,role,is_active) VALUES (?,?,?,?,?,'teacher',1)"); $s->execute([$id,$staffId,$email,password_hash($password,PASSWORD_DEFAULT),$name]); } catch (PDOException $e) { if ((int)$e->errorInfo[1]===1062) out(['error'=>'That staff ID or email is already registered'],409); throw $e; } out(['data'=>['user'=>['id'=>$id,'email'=>$email,'staff_id'=>$staffId]]]); }
 if ($method==='POST' && ($action==='login' || ($input['action']??null)==='login')) { $s=$pdo->prepare('SELECT * FROM profiles WHERE email=? AND is_active=1 LIMIT 1'); $s->execute([$input['email']??'']); $p=$s->fetch(); if(!$p || !password_verify($input['password']??'',$p['password_hash'])) out(['error'=>'Invalid credentials'],401); unset($p['password_hash']); $_SESSION['user']=$p; out(['user'=>['id'=>$p['id'],'email'=>$p['email']],'profile'=>$p]); }
 if (isset($input['rpc']) && $input['rpc']==='submit_public_request') { $a=$input['args']??[]; $code=referenceCode(); $s=$pdo->prepare('INSERT INTO access_requests (id,reference_code,requester_name,relationship,contact,student_lrn,student_last_name,document_type_id,purpose,source,status) VALUES (?,?,?,?,?,?,?,?,?,"web","pending")'); $s->execute([uuid(),$code,$a['p_requester_name']??'', $a['p_relationship']??null,$a['p_contact']??null,$a['p_student_lrn']??'',$a['p_student_last_name']??'',$a['p_document_type_id']??null,$a['p_purpose']??null]); out(['data'=>[['reference_code'=>$code]]]); }
-if (isset($input['rpc'])) { $fn=$input['rpc']; $a=$input['args']??[]; if($fn==='get_login_email'){ $s=$pdo->prepare('SELECT email FROM profiles WHERE UPPER(staff_id)=UPPER(?) AND is_active=1'); $s->execute([$a['p_staff_id']??'']); out(['data'=>$s->fetchColumn()?:null]); } if($fn==='get_my_profile'){ requireAuth(); out(['data'=>user()]); } if($fn==='list_teacher_accounts'){ requireAuth('admin'); $r=$pdo->query("SELECT id,staff_id,email,full_name,is_active,role,created_at FROM profiles WHERE role='teacher' ORDER BY full_name")->fetchAll(); out(['data'=>$r]); } if($fn==='list_admin_documents'){ requireAuth('admin'); $r=$pdo->query('SELECT d.*,dt.code document_type_code,dt.name document_type_name,s.last_name student_last_name,s.first_name student_first_name,s.lrn student_lrn,s.grade_level student_grade_level,s.section student_section,p.full_name uploader_name FROM documents d LEFT JOIN document_types dt ON dt.id=d.type_id LEFT JOIN students s ON s.id=d.student_id LEFT JOIN profiles p ON p.id=d.uploaded_by ORDER BY d.created_at DESC')->fetchAll(); out(['data'=>$r]); } if($fn==='track_request'){ $s=$pdo->prepare('SELECT ar.reference_code,ar.status,dt.name document_type,ar.requester_name,ar.created_at,ar.decided_at,ar.release_note FROM access_requests ar LEFT JOIN document_types dt ON dt.id=ar.document_type_id WHERE UPPER(ar.reference_code)=UPPER(?) AND LOWER(ar.student_last_name)=LOWER(?)'); $s->execute([$a['p_code']??'',$a['p_last_name']??'']); out(['data'=>$s->fetchAll()]); } out(['data'=>[]]); }
+if (isset($input['rpc'])) { $fn=$input['rpc']; $a=$input['args']??[]; if($fn==='get_login_email'){ $s=$pdo->prepare('SELECT email FROM profiles WHERE UPPER(staff_id)=UPPER(?) AND is_active=1'); $s->execute([$a['p_staff_id']??'']); out(['data'=>$s->fetchColumn()?:null]); } if($fn==='get_my_profile'){ requireAuth(); out(['data'=>user()]); } if($fn==='list_teacher_accounts'){ requireAuth('admin'); $r=$pdo->query("SELECT id,staff_id,email,full_name,is_active,role,created_at FROM profiles WHERE role='teacher' ORDER BY full_name")->fetchAll(); out(['data'=>$r]); } if($fn==='list_admin_documents'){ $viewer=requireAuth(); if($viewer['role']!=='admin' && $viewer['role']!=='teacher') out(['error'=>'Forbidden'],403); $where=[];$args=[]; if($viewer['role']==='teacher') { $where[]='d.is_classified=0 AND EXISTS (SELECT 1 FROM teacher_assignments ta WHERE ta.teacher_id=? AND ta.grade_level=s.grade_level AND COALESCE(ta.section,"")=COALESCE(s.section,""))'; $args[]=$viewer['id']; } $search=trim((string)($a['p_search']??'')); if($search!=='') { $where[]='(d.title LIKE ? OR s.last_name LIKE ? OR s.first_name LIKE ? OR s.lrn LIKE ?)'; $like='%'.$search.'%'; array_push($args,$like,$like,$like,$like); } $sql='SELECT d.*,dt.code document_type_code,dt.name document_type_name,s.last_name student_last_name,s.first_name student_first_name,s.lrn student_lrn,s.grade_level student_grade_level,s.section student_section,p.full_name uploader_name FROM documents d LEFT JOIN document_types dt ON dt.id=d.type_id LEFT JOIN students s ON s.id=d.student_id LEFT JOIN profiles p ON p.id=d.uploaded_by'.($where?' WHERE '.implode(' AND ',$where):'').' ORDER BY d.created_at DESC'; $stmt=$pdo->prepare($sql); $stmt->execute($args); out(['data'=>$stmt->fetchAll()]); } if($fn==='track_request'){ $s=$pdo->prepare('SELECT ar.reference_code,ar.status,dt.name document_type,ar.requester_name,ar.created_at,ar.decided_at,ar.release_note FROM access_requests ar LEFT JOIN document_types dt ON dt.id=ar.document_type_id WHERE UPPER(ar.reference_code)=UPPER(?) AND LOWER(ar.student_last_name)=LOWER(?)'); $s->execute([$a['p_code']??'',$a['p_last_name']??'']); out(['data'=>$s->fetchAll()]); } out(['data'=>[]]); }
 if ($method==='GET') {
   $table=(string)($_GET['table']??'');
   $allowed=['students','documents','document_types','access_requests','teacher_assignments','profiles','audit_logs'];
@@ -254,7 +413,8 @@ if ($method==='POST' && isset($input['table'])) {
   $filtersInput=$input['filters']??[];
   if(!is_array($data)) out(['error'=>'Invalid table data'],422);
   $isTeacherRequest=$u['role']==='teacher' && $table==='access_requests' && $action==='insert';
-  if($u['role']!=='admin' && !$isTeacherRequest) out(['error'=>'Forbidden'],403);
+  $isTeacherDocumentInsert=$u['role']==='teacher' && $table==='documents' && $action==='insert';
+  if($u['role']!=='admin' && !$isTeacherRequest && !$isTeacherDocumentInsert) out(['error'=>'Forbidden'],403);
   if($isTeacherRequest) {
     $studentId=(string)($data['student_id']??'');
     $assignment=$pdo->prepare('SELECT s.lrn,s.last_name,s.grade_level,s.section FROM students s JOIN teacher_assignments ta ON ta.grade_level=s.grade_level AND COALESCE(ta.section,"")=COALESCE(s.section,"") WHERE s.id=? AND ta.teacher_id=?');
@@ -289,6 +449,43 @@ if ($method==='POST' && isset($input['table'])) {
     $pdo->prepare($sql)->execute(array_values($requestData));
     out(['data'=>['reference_code'=>$requestData['reference_code']]]);
   }
+  if($isTeacherDocumentInsert) {
+    $studentId=(string)($data['student_id']??'');
+    if(!teacherCanAccessStudent($u['id'],$studentId)) out(['error'=>'You are not assigned to this student'],403);
+    $required=['student_id','type_id','title','storage_path','file_name','mime_type','file_size'];
+    if(array_diff($required,array_keys($data))) out(['error'=>'Document details are incomplete'],422);
+    $allowed=['student_id','type_id','title','school_year','grade_level','storage_path','file_name','mime_type','file_size','uploaded_by','is_classified'];
+    if(array_diff(array_keys($data),$allowed)) out(['error'=>'Invalid document data'],422);
+    $studentStmt=$pdo->prepare('SELECT grade_level FROM students WHERE id=?');
+    $studentStmt->execute([$studentId]);
+    $student=$studentStmt->fetch();
+    $typeStmt=$pdo->prepare('SELECT id FROM document_types WHERE id=?');
+    $typeStmt->execute([$data['type_id']]);
+    if(!$student || !$typeStmt->fetchColumn()) out(['error'=>'Student or document type not found'],422);
+    $storagePath=safeStoragePath((string)$data['storage_path']);
+    if(!str_starts_with($storagePath,$studentId.'/')) out(['error'=>'Invalid student file path'],422);
+    $file=realpath(STORAGE_ROOT.'/'.$storagePath);
+    $root=realpath(STORAGE_ROOT);
+    if(!$file || !$root || !str_starts_with($file,$root.DIRECTORY_SEPARATOR) || !is_file($file)) out(['error'=>'Uploaded file not found'],422);
+    $document=[
+      'id'=>uuid(),
+      'student_id'=>$studentId,
+      'type_id'=>(int)$data['type_id'],
+      'title'=>trim((string)$data['title']),
+      'school_year'=>isset($data['school_year'])?(string)$data['school_year']:null,
+      'grade_level'=>$student['grade_level'],
+      'storage_path'=>$storagePath,
+      'file_name'=>basename((string)$data['file_name']),
+      'mime_type'=>(string)$data['mime_type'],
+      'file_size'=>(int)$data['file_size'],
+      'uploaded_by'=>$u['id'],
+      'is_classified'=>0,
+    ];
+    if($document['title']==='' || $document['file_name']==='' || $document['file_size']<0) out(['error'=>'Invalid document details'],422);
+    $columns=array_keys($document);
+    $pdo->prepare('INSERT INTO documents (`'.implode('`,`',$columns).'`) VALUES ('.implode(',',array_fill(0,count($columns),'?')).')')->execute(array_values($document));
+    out(['data'=>$document]);
+  }
   $columnsByTable=[
     'profiles'=>['is_active'],
     'students'=>['id','lrn','last_name','first_name','middle_name','birth_date','sex','grade_level','section','guardian_name','status'],
@@ -300,6 +497,7 @@ if ($method==='POST' && isset($input['table'])) {
   ];
   if(($action!=='delete' && ($data===[] || array_diff(array_keys($data),$columnsByTable[$table])))) out(['error'=>'Invalid table data'],422);
   if($action==='insert' || $action==='upsert') {
+    if($table==='documents' && empty($data['id'])) $data['id']=uuid();
     $columns=array_keys($data);
     $quotedColumns='`'.implode('`,`',$columns).'`';
     $placeholders=implode(',',array_fill(0,count($columns),'?'));

@@ -1,16 +1,18 @@
 import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Plus, Search, ChevronRight } from 'lucide-react'
+import { Plus, Search, ChevronRight, FileUp } from 'lucide-react'
 import { useStudents, useUpsertStudent } from '../../hooks/useStudents'
 import { PageHeader, Badge } from '../../components/ui/index'
 import Modal from '../../components/ui/Modal'
 import StudentForm from '../../components/StudentForm'
 import SortControl, { sortRecords } from '../../components/SortControl'
+import BulkImportModal from '../../components/BulkImportModal'
 
 export default function AdminStudents() {
   const navigate = useNavigate()
   const [search, setSearch] = useState('')
   const [modal, setModal] = useState(null) // null | { mode: 'add' | 'edit', student? }
+  const [bulkImport, setBulkImport] = useState(false)
   const [sort, setSort] = useState('last_name:asc')
 
   const { data: students = [], isLoading, error } = useStudents(search)
@@ -27,14 +29,20 @@ export default function AdminStudents() {
       <PageHeader
         title="Students"
         subtitle={`${students.length} record${students.length !== 1 ? 's' : ''}`}
-        action={
+        action={<div className="flex flex-wrap gap-2">
+          <button
+            onClick={() => setBulkImport(true)}
+            className="flex items-center gap-2 border border-blue-300 text-blue-700 hover:bg-blue-50 text-sm font-medium px-4 py-2 rounded-lg transition-colors"
+          >
+            <FileUp size={16} /> Bulk Import
+          </button>
           <button
             onClick={() => setModal({ mode: 'add' })}
             className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors"
           >
             <Plus size={16} /> Add Student
           </button>
-        }
+        </div>}
       />
 
       {/* Search */}
@@ -118,6 +126,7 @@ export default function AdminStudents() {
           />
         </Modal>
       )}
+      {bulkImport && <BulkImportModal type="students" onClose={() => setBulkImport(false)} />}
     </div>
   )
 }

@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { ArrowLeft, Plus } from 'lucide-react'
+import { ArrowLeft, Plus, Upload } from 'lucide-react'
 import { useStudent } from '../../hooks/useStudents'
 import { useMyAssignments, studentMatchesAssignments } from '../../hooks/useAssignments'
 import { useDocuments, useDocumentTypes } from '../../hooks/useDocuments'
@@ -9,6 +9,7 @@ import { useAuth } from '../../context/AuthContext'
 import { Badge } from '../../components/ui/index'
 import Modal from '../../components/ui/Modal'
 import DocumentList from '../../components/DocumentList'
+import DocumentUploadForm from '../../components/DocumentUploadForm'
 import { Loader2 } from 'lucide-react'
 import AlertMessage from '../../components/ui/AlertMessage'
 
@@ -26,6 +27,7 @@ export default function TeacherStudentDetail() {
   const navigate = useNavigate()
   const { profile } = useAuth()
   const [modal, setModal] = useState(false)
+  const [uploadModal, setUploadModal] = useState(false)
   const [typeId, setTypeId] = useState('')
   const [purpose, setPurpose] = useState('')
   const [refCode, setRefCode] = useState(null)
@@ -94,12 +96,29 @@ export default function TeacherStudentDetail() {
 
       <div className="flex items-center justify-between mb-3">
         <h2 className="font-semibold text-gray-900">Documents ({visibleDocs.length})</h2>
-        <button onClick={() => { setModal(true); setRefCode(null); setTypeId(''); setPurpose(''); setError('') }}
-          className="flex items-center gap-2 bg-emerald-600 hover:bg-emerald-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
-          <Plus size={15} /> Request a File
-        </button>
+        <div className="flex flex-wrap justify-end gap-2">
+          <button onClick={() => setUploadModal(true)}
+            className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+            <Upload size={15} /> Upload Document
+          </button>
+          <button onClick={() => { setModal(true); setRefCode(null); setTypeId(''); setPurpose(''); setError('') }}
+            className="flex items-center gap-2 border border-emerald-600 text-emerald-700 hover:bg-emerald-50 text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+            <Plus size={15} /> Request a File
+          </button>
+        </div>
       </div>
       <DocumentList documents={visibleDocs} loading={docsLoading} canDelete={false} />
+
+      {uploadModal && (
+        <Modal title="Upload Document" onClose={() => setUploadModal(false)} size="md">
+          <DocumentUploadForm
+            studentId={id}
+            allowClassification={false}
+            onSuccess={() => setUploadModal(false)}
+            onCancel={() => setUploadModal(false)}
+          />
+        </Modal>
+      )}
 
       {modal && (
         <Modal title="Request a File" onClose={() => setModal(false)} size="sm">

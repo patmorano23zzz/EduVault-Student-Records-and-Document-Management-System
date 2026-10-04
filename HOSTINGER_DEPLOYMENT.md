@@ -54,6 +54,44 @@ React application.
    SQL files into the public web root.
 6. Ensure PHP 8.1+, PDO MySQL, sessions, and HTTPS are enabled.
 
+Teachers can view and download non-classified files for students in their
+assigned grade/section, and upload non-classified files from that student's
+detail page. The API enforces these assignment limits; uploads are limited to
+10 MB on shared hosting.
+
+Admins can bulk-import students and teachers from the Students and Teachers
+pages using the downloadable CSV templates. Imports add new records only,
+process rows independently, and report row-level errors. Teacher CSV files
+contain temporary passwords; transfer and store them securely, and delete
+the CSV after distributing credentials.
+
+## Scheduled backup setup
+
+The Admin dashboard can schedule a daily, weekly, or monthly ZIP containing
+stored student documents and `manifest.json`. It does not contain a complete
+SQL database dump. Only the newest scheduled ZIP is retained under
+`storage/backups/latest.zip`; download it from the dashboard and keep a
+separate copy somewhere safe. A dashboard reminder appears within 24 hours of
+the next scheduled run. Schedule times use `Asia/Manila`.
+
+1. For an existing database, import
+   [`database/backup-schedule-migration.sql`](./database/backup-schedule-migration.sql)
+   once. New databases created from `database/schema.sql` already include it.
+2. Upload `api/index.php`, `api/backup.php`, and `api/backup_cron.php` to the
+   matching `public_html/api/` directory. Preserve `api/config.local.php`.
+3. In Hostinger hPanel, add a Cron Job that invokes the CLI script
+   `api/backup_cron.php` at least every 5 minutes. Use the PHP executable and
+   absolute file path shown by Hostinger for your account, for example:
+   `php /home/ACCOUNT/domains/DOMAIN/public_html/api/backup_cron.php`.
+   Do not configure this as a public URL request; the script only runs in PHP
+   CLI mode.
+4. Sign in as admin, open the dashboard, enable and save the desired
+   frequency/day/time, then confirm the next run is shown. Hostinger cron
+   execution is required; saving a schedule alone does not create backups.
+5. After the scheduled time, check the dashboard's last completed time and
+   download the latest scheduled ZIP. If a run fails, the dashboard shows the
+   last error.
+
 The schema inserts an initial admin account with staff ID `ADM-001`. Sign in
 with the initial password supplied separately for the deployment and change
 it immediately. The schema stores only a PHP-compatible password hash; never

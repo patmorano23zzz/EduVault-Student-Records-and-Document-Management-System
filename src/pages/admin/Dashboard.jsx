@@ -9,6 +9,7 @@ import { useAllDocuments } from '../../hooks/useDocuments'
 import { useNavigate } from 'react-router-dom'
 import { useAuth } from '../../context/AuthContext'
 import SortControl, { sortRecords } from '../../components/SortControl'
+import BackupSchedulePanel from '../../components/BackupSchedulePanel'
 
 function StatCard({ icon: Icon, label, value, detail, color }) {
   return (
@@ -69,6 +70,8 @@ export default function AdminDashboard() {
           </button>
         </div>
       </div>
+
+      <BackupSchedulePanel />
 
       <div className="grid grid-cols-2 lg:grid-cols-4 gap-4 mb-8">
         <StatCard icon={Users} label="Total students" value={stats?.students} detail="Active learner profiles" color="bg-blue-600" />

@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Plus, Loader2, UserCheck, UserX, KeyRound } from 'lucide-react'
+import { Plus, Loader2, UserCheck, UserX, KeyRound, FileUp } from 'lucide-react'
 import { useTeachers, useToggleTeacherActive } from '../../hooks/useTeachers'
 import { PageHeader, Badge } from '../../components/ui/index'
 import Modal from '../../components/ui/Modal'
@@ -16,6 +16,7 @@ import {
 } from '../../hooks/useAssignments'
 import { Trash2, FolderPlus } from 'lucide-react'
 import SortControl, { sortRecords } from '../../components/SortControl'
+import BulkImportModal from '../../components/BulkImportModal'
 
 const GRADE_LEVELS = ['Kinder', 'Grade 1', 'Grade 2', 'Grade 3', 'Grade 4', 'Grade 5', 'Grade 6']
 
@@ -230,6 +231,7 @@ export default function AdminTeachers() {
   const toggle = useToggleTeacherActive()
   const toast = useToast()
   const [modal, setModal] = useState(false)
+  const [bulkImport, setBulkImport] = useState(false)
   const [confirmToggle, setConfirmToggle] = useState(null)
   const [assignmentsFor, setAssignmentsFor] = useState(null)
   const [passwordFor, setPasswordFor] = useState(null)
@@ -252,12 +254,16 @@ export default function AdminTeachers() {
       <PageHeader
         title="Teachers"
         subtitle="Manage teacher portal accounts"
-        action={
+        action={<div className="flex flex-wrap gap-2">
+          <button onClick={() => setBulkImport(true)}
+            className="flex items-center gap-2 border border-blue-300 text-blue-700 hover:bg-blue-50 text-sm font-medium px-4 py-2 rounded-lg transition-colors">
+            <FileUp size={16} /> Bulk Import
+          </button>
           <button onClick={() => setModal(true)}
             className="flex items-center gap-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-medium px-4 py-2 rounded-lg transition-colors">
             <Plus size={16} /> Add Teacher
           </button>
-        }
+        </div>}
       />
 
       <div className="table-scroll bg-white rounded-xl border border-gray-200 overflow-hidden">
@@ -336,6 +342,7 @@ export default function AdminTeachers() {
           <CreateTeacherForm onClose={() => setModal(false)} />
         </Modal>
       )}
+      {bulkImport && <BulkImportModal type="teachers" onClose={() => setBulkImport(false)} />}
       {assignmentsFor && (
         <Modal title="Assign Grade & Section" onClose={() => setAssignmentsFor(null)} size="sm">
           <AssignmentsModal teacher={assignmentsFor} onClose={() => setAssignmentsFor(null)} />
