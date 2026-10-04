@@ -1,5 +1,5 @@
 import { useMemo, useState } from 'react'
-import { Plus, Loader2, UserCheck, UserX } from 'lucide-react'
+import { Plus, Loader2, UserCheck, UserX, KeyRound } from 'lucide-react'
 import { useTeachers, useToggleTeacherActive } from '../../hooks/useTeachers'
 import { PageHeader, Badge } from '../../components/ui/index'
 import Modal from '../../components/ui/Modal'
@@ -136,6 +136,7 @@ function CreateTeacherForm({ onClose }) {
     } finally {
       setLoading(false)
     }
+
   }
 
   return (
@@ -179,6 +180,51 @@ function CreateTeacherForm({ onClose }) {
   )
 }
 
+function ResetPasswordForm({ teacher, onClose }) {
+  const toast = useToast()
+  const [password, setPassword] = useState('')
+  const [confirmPassword, setConfirmPassword] = useState('')
+  const [loading, setLoading] = useState(false)
+  const [error, setError] = useState('')
+
+  async function handleSubmit(e) {
+    e.preventDefault()
+    setError('')
+    if (password.length < 8) return setError('Password must be at least 8 characters.')
+    if (password !== confirmPassword) return setError('Passwords do not match.')
+    setLoading(true)
+    try {
+      const { error: resetError } = await supabase.functions.invoke('reset_teacher_password', {
+        body: { teacher_id: teacher.id, password },
+      })
+      if (resetError) throw resetError
+      toast(`Password reset for ${teacher.full_name}.`, 'success')
+      onClose()
+    } catch (err) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  return (
+    <form onSubmit={handleSubmit} className="space-y-4">
+      <p className="text-sm text-gray-500">Set a new password for <span className="font-medium text-gray-900">{teacher.full_name}</span>.</p>
+      <PasswordInput required minLength={8} value={password} onChange={e => setPassword(e.target.value)}
+        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="New password (min. 8 characters)" />
+      <PasswordInput required minLength={8} value={confirmPassword} onChange={e => setConfirmPassword(e.target.value)}
+        className="w-full border border-gray-300 rounded-lg px-3 py-2 text-sm" placeholder="Confirm new password" />
+      {error && <AlertMessage>{error}</AlertMessage>}
+      <div className="flex justify-end gap-3 pt-2">
+        <button type="button" onClick={onClose} className="px-4 py-2 text-sm text-gray-600">Cancel</button>
+        <button type="submit" disabled={loading} className="flex items-center gap-2 bg-blue-600 text-white text-sm font-medium px-5 py-2 rounded-lg disabled:opacity-60">
+          {loading && <Loader2 size={14} className="animate-spin" />} {loading ? 'Saving…' : 'Reset Password'}
+        </button>
+      </div>
+    </form>
+  )
+}
+
 export default function AdminTeachers() {
   const { data: teachers = [], isLoading, isError, error } = useTeachers()
   const toggle = useToggleTeacherActive()
@@ -186,6 +232,7 @@ export default function AdminTeachers() {
   const [modal, setModal] = useState(false)
   const [confirmToggle, setConfirmToggle] = useState(null)
   const [assignmentsFor, setAssignmentsFor] = useState(null)
+  const [passwordFor, setPasswordFor] = useState(null)
   const [sort, setSort] = useState('full_name:asc')
   const sortedTeachers = useMemo(() => sortRecords(teachers, ...sort.split(':')), [teachers, sort])
 
@@ -259,17 +306,23 @@ export default function AdminTeachers() {
                     </button>
                   </td>
                   <td className="px-4 py-3">
-                    <button
-                      onClick={() => setConfirmToggle(t)}
-                      disabled={toggle.isPending}
-                      className={`flex items-center gap-1.5 text-xs font-medium transition-colors disabled:opacity-50
-                        ${t.is_active ? 'text-red-600 hover:text-red-800' : 'text-green-600 hover:text-green-800'}`}
-                    >
-                      {t.is_active
-                        ? <><UserX size={14} /> Deactivate</>
-                        : <><UserCheck size={14} /> Activate</>
-                      }
-                    </button>
+                    <div className="flex flex-col items-start gap-2">
+                      <button onClick={() => setPasswordFor(t)}
+                        className="flex items-center gap-1.5 text-xs font-medium text-blue-600 hover:text-blue-800 transition-colors">
+                        <KeyRound size={14} /> Reset Password
+                      </button>
+                      <button
+                        onClick={() => setConfirmToggle(t)}
+                        disabled={toggle.isPending}
+                        className={`flex items-center gap-1.5 text-xs font-medium transition-colors disabled:opacity-50
+                          ${t.is_active ? 'text-red-600 hover:text-red-800' : 'text-green-600 hover:text-green-800'}`}
+                      >
+                        {t.is_active
+                          ? <><UserX size={14} /> Deactivate</>
+                          : <><UserCheck size={14} /> Activate</>
+                        }
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -286,6 +339,11 @@ export default function AdminTeachers() {
       {assignmentsFor && (
         <Modal title="Assign Grade & Section" onClose={() => setAssignmentsFor(null)} size="sm">
           <AssignmentsModal teacher={assignmentsFor} onClose={() => setAssignmentsFor(null)} />
+        </Modal>
+      )}
+      {passwordFor && (
+        <Modal title="Reset Teacher Password" onClose={() => setPasswordFor(null)} size="sm">
+          <ResetPasswordForm teacher={passwordFor} onClose={() => setPasswordFor(null)} />
         </Modal>
       )}
       {confirmToggle && (

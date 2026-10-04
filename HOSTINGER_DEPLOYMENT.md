@@ -11,10 +11,11 @@ frontend locally; Node.js is not required on the hosting account.
 
 1. Create an InfinityFree account and an `ixdb_...` MySQL database.
 2. Open phpMyAdmin from the InfinityFree control panel and import
-   [`schema.sql`](./schema.sql).
+   [`database/schema.sql`](./database/schema.sql) from your computer.
 3. Copy `api/config.infinityfree.php.example` to `api/config.local.php` and
    use the exact MySQL host, database name, username, and password shown in
-   the control panel.
+   the control panel. Set `ADMIN_RECOVERY_SECRET` to a long private phrase
+   before using the login recovery form.
    Do not assume the database host is `localhost`.
 4. Run `npm ci` and `npm run build` locally.
 5. Upload the contents of `dist/` into the account's `htdocs/` directory.
@@ -31,20 +32,22 @@ React application.
 
 ## Free shared-hosting setup
 
-1. Create a Hostinger MySQL database and import [`schema.sql`](./schema.sql).
+1. Create a Hostinger MySQL database and import
+   [`database/schema.sql`](./database/schema.sql) from your computer.
 2. Copy `api/config.php` to `api/config.local.php` and set the database
    host/name/user/password. Keep `config.local.php` out of Git.
 3. Put `storage/` outside `public_html` when the plan permits it. If it must
    be inside the web root, keep the included `.htaccess`; downloads still pass
    through `api/index.php` and role checks.
-4. Upload the contents of `dist/` to `public_html/`, then upload `api/`,
-   `schema.sql` (optional, preferably remove after import), and `storage/`.
+4. Upload the contents of `dist/` to `public_html/`, then upload `api/` and
+   `storage/`. Do not upload the schema SQL file into the public web root.
 5. Ensure PHP 8.1+, PDO MySQL, sessions, and HTTPS are enabled.
 
-Create the first admin using [`create-admin.sql.example`](./create-admin.sql.example).
-Generate the bcrypt value with PHP's `password_hash()` and replace the
-placeholder before importing it. Never store a plaintext password in this
-repository.
+The schema inserts an initial admin account with staff ID `ADM-001`. Sign in
+with the temporary password provided for this deployment and change it
+immediately. The schema stores only a PHP-compatible password hash; never add
+a plaintext password to the repository or leave SQL files in the public web
+root.
 
 ## Build
 

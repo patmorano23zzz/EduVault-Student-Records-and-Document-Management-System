@@ -2,7 +2,7 @@ import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../../lib/api'
 import { useAuth } from '../../context/AuthContext'
-import { ArrowLeft, Loader2, ShieldCheck } from 'lucide-react'
+import { ArrowLeft, Loader2, ShieldCheck, KeyRound } from 'lucide-react'
 import PasswordInput from '../../components/ui/PasswordInput'
 import AlertMessage from '../../components/ui/AlertMessage'
 import BrandMark from '../../components/BrandMark'
@@ -15,6 +15,12 @@ export default function Login() {
   const [password, setPassword] = useState('')
   const [error, setError] = useState('')
   const [loading, setLoading] = useState(false)
+  const [showRecovery, setShowRecovery] = useState(false)
+  const [recoveryStaffId, setRecoveryStaffId] = useState('')
+  const [recoverySecret, setRecoverySecret] = useState('')
+  const [recoveryResult, setRecoveryResult] = useState('')
+  const [recoveryError, setRecoveryError] = useState('')
+  const [recoveryLoading, setRecoveryLoading] = useState(false)
 
   async function handleSubmit(e) {
     e.preventDefault()
@@ -60,6 +66,33 @@ export default function Login() {
       setError(requestError instanceof Error ? requestError.message : 'Unable to sign in. Please try again.')
     } finally {
       setLoading(false)
+    }
+  }
+
+  async function handleRecovery(e) {
+    e.preventDefault()
+    setRecoveryError('')
+    setRecoveryResult('')
+    setRecoveryLoading(true)
+    try {
+      const response = await fetch('/api/index.php', {
+        method: 'POST',
+        credentials: 'include',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'admin_recovery',
+          staff_id: recoveryStaffId.trim().toUpperCase(),
+          secret: recoverySecret,
+        }),
+      })
+      const body = await response.json().catch(() => ({}))
+      if (!response.ok || body.error) throw new Error(body.error || 'Recovery failed')
+      setRecoveryResult(`Temporary password: ${body.data.temporary_password}`)
+      setRecoverySecret('')
+    } catch (requestError) {
+      setRecoveryError(requestError instanceof Error ? requestError.message : 'Recovery failed')
+    } finally {
+      setRecoveryLoading(false)
     }
   }
 
@@ -129,6 +162,51 @@ export default function Login() {
             {loading ? 'Signing in…' : 'Sign in'}
           </button>
         </form>
+
+        <button
+          type="button"
+          onClick={() => setShowRecovery(value => !value)}
+          className="mt-5 flex w-full items-center justify-center gap-1.5 text-sm font-medium text-blue-600 hover:text-blue-700 transition-colors"
+        >
+          <KeyRound size={15} />
+          Forgot your password?
+        </button>
+
+        {showRecovery && (
+          <form onSubmit={handleRecovery} className="mt-4 rounded-xl border border-slate-200 bg-slate-50 p-4 text-sm text-slate-700">
+            <p className="font-semibold">Forgot Admin ID or Password?</p>
+            <p className="mt-1 leading-relaxed text-slate-500">
+              Enter the private recovery phrase configured by your system administrator. A temporary password will be shown once.
+            </p>
+            <input
+              required
+              value={recoveryStaffId}
+              onChange={e => setRecoveryStaffId(e.target.value)}
+              className="mt-3 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+              placeholder="Admin staff ID"
+            />
+            <input
+              required
+              type="password"
+              value={recoverySecret}
+              onChange={e => setRecoverySecret(e.target.value)}
+              className="mt-2 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm outline-none focus:border-blue-500 focus:ring-2 focus:ring-blue-500/10"
+              placeholder="Private recovery phrase"
+            />
+            {recoveryError && <p className="mt-2 text-sm text-red-600">{recoveryError}</p>}
+            {recoveryResult && (
+              <p className="mt-2 rounded-lg bg-amber-50 p-2 font-semibold text-amber-800">{recoveryResult}</p>
+            )}
+            <button
+              type="submit"
+              disabled={recoveryLoading}
+              className="mt-3 flex w-full items-center justify-center gap-2 rounded-lg bg-red-600 py-2.5 text-sm font-bold text-white hover:bg-red-700 disabled:opacity-60"
+            >
+              {recoveryLoading && <Loader2 size={15} className="animate-spin" />}
+              {recoveryLoading ? 'Resetting…' : 'Reset Admin Password'}
+            </button>
+          </form>
+        )}
 
         <p className="mt-7 text-center text-xs text-slate-400">
           For account issues, contact the school registrar.

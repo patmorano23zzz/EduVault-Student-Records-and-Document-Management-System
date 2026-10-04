@@ -1,6 +1,6 @@
--- Hostinger free/premium shared hosting schema.
--- Import this file into the MySQL database created in hPanel.
--- Create the first admin with a one-time PHP script or a generated password hash.
+-- Hostinger/InfinityFree MySQL schema.
+-- Import this file into the database created in the hosting control panel.
+-- This schema seeds the initial admin with a PHP password_hash() hash.
 
 CREATE TABLE profiles (
   id CHAR(32) PRIMARY KEY,
@@ -94,6 +94,26 @@ CREATE TABLE audit_logs (
   INDEX audit_created_idx (created_at),
   INDEX audit_actor_idx (actor_id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+-- Initial administrator. The password is stored as a PHP password_hash() hash.
+-- Login staff ID: ADM-001
+INSERT INTO profiles (
+  id,
+  staff_id,
+  email,
+  password_hash,
+  full_name,
+  role,
+  is_active
+) VALUES (
+  '6cf458a1b80d4e88a9202772f00c0001',
+  'ADM-001',
+  'admin@abes.page.gd',
+  '$2y$10$QfCxVTyo31/Y1DRrMP.glOGJr3KJB2pEFIALcrdeD6NEU1YrsTybW',
+  'System Administrator',
+  'admin',
+  1
+);
 
 INSERT INTO document_types (code, name, description) VALUES
   ('SF10', 'School Form 10 (Form 137)', 'Permanent record'),

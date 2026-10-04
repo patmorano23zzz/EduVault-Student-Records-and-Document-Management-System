@@ -11,3 +11,6 @@ const DB_NAME = 'YOUR_INFINITYFREE_DATABASE_NAME';
 const DB_USER = 'YOUR_INFINITYFREE_DATABASE_USER';
 const DB_PASS = 'YOUR_INFINITYFREE_DATABASE_PASSWORD';
 const STORAGE_ROOT = __DIR__ . '/../storage';
+// Leave empty to disable unauthenticated admin recovery. Set a unique,
+// high-entropy value only if you intend to use the recovery form.
+const ADMIN_RECOVERY_SECRET = '';

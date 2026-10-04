@@ -11,3 +11,4 @@ const DB_NAME = 'abes_db';
 const DB_USER = 'root';
 const DB_PASS = '';
 const STORAGE_ROOT = __DIR__ . '/../storage';
+const ADMIN_RECOVERY_SECRET = '';
