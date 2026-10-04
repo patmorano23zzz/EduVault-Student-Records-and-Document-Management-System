@@ -3,7 +3,7 @@ import { useAuth } from '../context/AuthContext'
 import { supabase } from '../lib/api'
 import {
   LayoutDashboard, Users, FileText,
-  ClipboardList, ScrollText, LogOut, Menu, X, GraduationCap
+  ClipboardList, ScrollText, LogOut, Menu, X, GraduationCap, Settings
 } from 'lucide-react'
 import { useState } from 'react'
 import { usePendingCount } from '../hooks/useRequests'
@@ -30,6 +30,7 @@ export default function AdminLayout() {
     { to: '/admin/requests',   label: 'Requests',   icon: ClipboardList, badge: pendingCount },
     { to: '/admin/teachers',   label: 'Teachers',   icon: GraduationCap },
     { to: '/admin/audit-logs', label: 'Audit Logs', icon: ScrollText },
+    { to: '/admin/settings',   label: 'Settings',   icon: Settings },
   ]
 
   return (

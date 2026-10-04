@@ -18,7 +18,45 @@ try { $pdo = new PDO('mysql:host='.DB_HOST.';port='.DB_PORT.';dbname='.DB_NAME.'
 function out(mixed $data, int $code=200): never { http_response_code($code); echo json_encode($data); exit; }
 function body(): array { return json_decode(file_get_contents('php://input'), true) ?: []; }
 function user(): ?array { $current=$_SESSION['user']??null; if(is_array($current)) unset($current['password_hash']); return $current; }
-function requireAuth(?string $role=null): array { $u=user(); if (!$u) out(['error'=>'Authentication required'],401); if ($role && $u['role']!=='admin' && $u['role']!==$role) out(['error'=>'Forbidden'],403); return $u; }
+function requireAuth(?string $role=null): array {
+  global $pdo;
+  $u=user();
+  if (!$u) out(['error'=>'Authentication required'],401);
+  $stmt=$pdo->prepare('SELECT role,is_active,auth_version FROM profiles WHERE id=?');
+  $stmt->execute([$u['id']]);
+  $current=$stmt->fetch();
+  if (!$current || !(int)$current['is_active'] || (int)($u['auth_version']??-1)!==(int)$current['auth_version']) {
+    unset($_SESSION['user']);
+    out(['error'=>'Your session expired. Please sign in again.'],401);
+  }
+  $u['role']=$current['role'];
+  if ($role && $u['role']!=='admin' && $u['role']!==$role) out(['error'=>'Forbidden'],403);
+  return $u;
+}
+function sendRecoveryEmail(string $to, string $subject, string $message, string $url): void {
+  foreach (['SMTP_HOST','SMTP_PORT','SMTP_USER','SMTP_PASS','SMTP_SECURE','SMTP_FROM_EMAIL','SMTP_FROM_NAME','APP_BASE_URL'] as $constant) {
+    if (!defined($constant) || constant($constant)==='') throw new RuntimeException('SMTP recovery mail is not configured: '.$constant);
+  }
+  $autoload=__DIR__.'/vendor/autoload.php';
+  if (!is_file($autoload)) throw new RuntimeException('Composer vendor autoload file is missing');
+  require_once $autoload;
+  $mail=new PHPMailer\PHPMailer\PHPMailer(true);
+  $mail->isSMTP();
+  $mail->Host=SMTP_HOST;
+  $mail->SMTPAuth=true;
+  $mail->Username=SMTP_USER;
+  $mail->Password=SMTP_PASS;
+  $mail->Port=(int)SMTP_PORT;
+  $mail->SMTPSecure=SMTP_SECURE==='ssl'
+    ? PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_SMTPS
+    : PHPMailer\PHPMailer\PHPMailer::ENCRYPTION_STARTTLS;
+  $mail->CharSet='UTF-8';
+  $mail->setFrom(SMTP_FROM_EMAIL,SMTP_FROM_NAME);
+  $mail->addAddress($to);
+  $mail->Subject=$subject;
+  $mail->Body=$message."\n\n".$url."\n\nThis link expires in 30 minutes. If you did not request it, ignore this email.";
+  $mail->send();
+}
 function uuid(): string { return bin2hex(random_bytes(16)); }
 function referenceCode(): string { return strtoupper(substr(bin2hex(random_bytes(6)), 0, 10)); }
 function safeStoragePath(string $path): string {
@@ -28,7 +66,87 @@ function safeStoragePath(string $path): string {
 }
 function filters(array $f, array &$where, array &$args): void { foreach ($f as $key=>$value) if (str_starts_with((string)$key,'eq[')) { $col=substr($key,3,-1); if (preg_match('/^[a-z_]+$/',$col)) { $where[]="`$col` = ?"; $args[]=$value; } } }
 $method=$_SERVER['REQUEST_METHOD']; $input=body(); $action=$_GET['action']??($input['action']??null);
-if ($method==='POST' && !in_array($action, ['login','logout','admin_recovery'], true) && (($input['rpc']??'') !== 'get_login_email') && (($_SERVER['HTTP_X_CSRF_TOKEN']??'') !== $_SESSION['csrf'])) out(['error'=>'Invalid CSRF token'],419);
+if ($method==='POST' && !in_array($action, ['login','logout'], true) && (($input['rpc']??'') !== 'get_login_email') && (($_SERVER['HTTP_X_CSRF_TOKEN']??'') !== $_SESSION['csrf'])) out(['error'=>'Invalid CSRF token'],419);
+if ($action==='recovery_email_status') {
+  $admin=requireAuth('admin');
+  $stmt=$pdo->prepare('SELECT recovery_email,verified_at,pending_email FROM admin_recovery_settings WHERE admin_id=?');
+  $stmt->execute([$admin['id']]);
+  out(['data'=>$stmt->fetch() ?: ['recovery_email'=>null,'verified_at'=>null,'pending_email'=>null]]);
+}
+if ($action==='recovery_email_request') {
+  $admin=requireAuth('admin');
+  $email=trim((string)($input['email']??''));
+  if (!filter_var($email,FILTER_VALIDATE_EMAIL)) out(['error'=>'Enter a valid recovery email address'],422);
+  $token=bin2hex(random_bytes(32));
+  $stmt=$pdo->prepare('INSERT INTO admin_recovery_settings (admin_id,pending_email,verification_token_hash,verification_expires_at) VALUES (?,?,?,DATE_ADD(NOW(),INTERVAL 30 MINUTE)) ON DUPLICATE KEY UPDATE pending_email=VALUES(pending_email),verification_token_hash=VALUES(verification_token_hash),verification_expires_at=VALUES(verification_expires_at)');
+  $stmt->execute([$admin['id'],$email,hash('sha256',$token)]);
+  try {
+    if (!defined('APP_BASE_URL') || APP_BASE_URL==='') throw new RuntimeException('APP_BASE_URL is not configured');
+    $url=rtrim(APP_BASE_URL,'/').'/verify-recovery-email?token='.rawurlencode($token);
+    sendRecoveryEmail($email,'Verify your EduVault recovery email','Verify this address for administrator password recovery:',$url);
+  } catch (Throwable $e) {
+    error_log('Recovery email delivery failed: '.$e->getMessage());
+    $pdo->prepare('UPDATE admin_recovery_settings SET verification_token_hash=NULL,verification_expires_at=NULL WHERE admin_id=?')->execute([$admin['id']]);
+    out(['error'=>'Could not send verification email. Check the server SMTP configuration and try again.'],503);
+  }
+  out(['data'=>true]);
+}
+if ($action==='recovery_email_confirm') {
+  $token=(string)($input['token']??'');
+  if (!preg_match('/^[a-f0-9]{64}$/',$token)) out(['error'=>'Verification link is invalid or expired'],422);
+  $stmt=$pdo->prepare('UPDATE admin_recovery_settings SET recovery_email=pending_email,verified_at=NOW(),pending_email=NULL,verification_token_hash=NULL,verification_expires_at=NULL WHERE verification_token_hash=? AND verification_expires_at>NOW() AND pending_email IS NOT NULL');
+  $stmt->execute([hash('sha256',$token)]);
+  if ($stmt->rowCount()!==1) out(['error'=>'Verification link is invalid or expired'],422);
+  out(['data'=>true]);
+}
+if ($action==='password_reset_request') {
+  $staffId=strtoupper(trim((string)($input['staff_id']??'')));
+  $generic='If the administrator account has a verified recovery email, a reset link will be sent shortly.';
+  if (!preg_match('/^[A-Z0-9-]{2,50}$/',$staffId)) out(['data'=>['message'=>$generic]]);
+  $stmt=$pdo->prepare("SELECT p.id,p.full_name,s.recovery_email FROM profiles p JOIN admin_recovery_settings s ON s.admin_id=p.id AND s.verified_at IS NOT NULL WHERE UPPER(p.staff_id)=? AND p.role='admin' AND p.is_active=1 LIMIT 1");
+  $stmt->execute([$staffId]);
+  $admin=$stmt->fetch();
+  if (!$admin) out(['data'=>['message'=>$generic]]);
+  $pdo->prepare('DELETE FROM password_reset_tokens WHERE created_at<DATE_SUB(NOW(),INTERVAL 1 DAY)')->execute();
+  $count=$pdo->prepare('SELECT COUNT(*) FROM password_reset_tokens WHERE profile_id=? AND created_at>DATE_SUB(NOW(),INTERVAL 15 MINUTE)');
+  $count->execute([$admin['id']]);
+  if ((int)$count->fetchColumn()>=3) out(['data'=>['message'=>$generic]]);
+  $token=bin2hex(random_bytes(32));
+  $pdo->prepare('UPDATE password_reset_tokens SET used_at=COALESCE(used_at,NOW()) WHERE profile_id=?')->execute([$admin['id']]);
+  $pdo->prepare('INSERT INTO password_reset_tokens (id,profile_id,token_hash,expires_at) VALUES (?,?,?,DATE_ADD(NOW(),INTERVAL 30 MINUTE))')->execute([uuid(),$admin['id'],hash('sha256',$token)]);
+  try {
+    if (!defined('APP_BASE_URL') || APP_BASE_URL==='') throw new RuntimeException('APP_BASE_URL is not configured');
+    $url=rtrim(APP_BASE_URL,'/').'/reset-password?token='.rawurlencode($token);
+    sendRecoveryEmail($admin['recovery_email'],'Reset your EduVault administrator password','A password reset was requested for the administrator account:',$url);
+  } catch (Throwable $e) {
+    error_log('Password reset email delivery failed: '.$e->getMessage());
+    $pdo->prepare('DELETE FROM password_reset_tokens WHERE profile_id=?')->execute([$admin['id']]);
+    out(['data'=>['message'=>$generic]]);
+  }
+  out(['data'=>['message'=>$generic]]);
+}
+if ($action==='password_reset_complete') {
+  $token=(string)($input['token']??'');
+  $password=(string)($input['password']??'');
+  if (!preg_match('/^[a-f0-9]{64}$/',$token) || strlen($password)<12) out(['error'=>'The reset link is invalid or expired, or the new password is too short'],422);
+  $pdo->beginTransaction();
+  try {
+    $stmt=$pdo->prepare("SELECT t.id,t.profile_id FROM password_reset_tokens t JOIN profiles p ON p.id=t.profile_id WHERE t.token_hash=? AND t.expires_at>NOW() AND t.used_at IS NULL AND p.role='admin' AND p.is_active=1 FOR UPDATE");
+    $stmt->execute([hash('sha256',$token)]);
+    $reset=$stmt->fetch();
+    if (!$reset) {
+      $pdo->rollBack();
+      out(['error'=>'The reset link is invalid or expired'],422);
+    }
+    $pdo->prepare('UPDATE profiles SET password_hash=?,auth_version=auth_version+1 WHERE id=?')->execute([password_hash($password,PASSWORD_DEFAULT),$reset['profile_id']]);
+    $pdo->prepare('UPDATE password_reset_tokens SET used_at=COALESCE(used_at,NOW()) WHERE profile_id=?')->execute([$reset['profile_id']]);
+    $pdo->commit();
+  } catch (Throwable $e) {
+    if ($pdo->inTransaction()) $pdo->rollBack();
+    throw $e;
+  }
+  out(['data'=>true]);
+}
 if ($action==='backup_download') {
   requireAuth('admin');
   if (!class_exists('ZipArchive')) out(['error'=>'ZIP backups are not available because the PHP Zip extension is disabled'],503);
@@ -79,21 +197,10 @@ if ($action==='upload' && !empty($_FILES['file']) && isset($_POST['student_id'],
   if (!move_uploaded_file($_FILES['file']['tmp_name'],$target)) out(['error'=>'Could not save file'],500);
   out(['data'=>['path'=>$path]]);
 }
-if ($action==='session') out(['user'=>user(),'session'=>user()?['user'=>user()]:null]);
+if ($action==='session') { $sessionUser=user(); if ($sessionUser) $sessionUser=requireAuth(); out(['user'=>$sessionUser,'session'=>$sessionUser?['user'=>$sessionUser]:null]); }
 if ($action==='download') { $u=requireAuth(); $path=safeStoragePath($_GET['path']??''); $stmt=$pdo->prepare('SELECT storage_path,file_name,mime_type FROM documents WHERE storage_path=?'); $stmt->execute([$path]); $doc=$stmt->fetch(); if(!$doc) out(['error'=>'Not found'],404); if($u['role']!=='admin') { $q=$pdo->prepare('SELECT 1 FROM documents d JOIN students s ON s.id=d.student_id JOIN teacher_assignments a ON a.teacher_id=? AND a.grade_level=s.grade_level AND COALESCE(a.section,"")=COALESCE(s.section,"") WHERE d.storage_path=? AND d.is_classified=0'); $q->execute([$u['id'], $path]); if(!$q->fetchColumn()) out(['error'=>'Forbidden'],403); } $file=realpath(STORAGE_ROOT.'/'.$path); $root=realpath(STORAGE_ROOT); if(!$file || !$root || !str_starts_with($file, $root.DIRECTORY_SEPARATOR) || !is_file($file)) out(['error'=>'Not found'],404); header('Content-Type: '.($doc['mime_type'] ?: 'application/octet-stream')); header('Content-Disposition: attachment; filename="'.basename($doc['file_name']).'"'); readfile($file); exit; }
 if ($action==='upload') { requireAuth('admin'); if(empty($_FILES['file']) || $_FILES['file']['error'] !== UPLOAD_ERR_OK) out(['error'=>'File upload failed'],422); if((int)$_FILES['file']['size'] > 10 * 1024 * 1024) out(['error'=>'Maximum file size is 10 MB on shared hosting'],422); $requested=$_POST['path']??(uuid().'/'.basename($_FILES['file']['name'])); $requested=str_replace('\\','/',(string)$requested); $parts=explode('/',trim($requested,'/')); $fileName=preg_replace('/[^A-Za-z0-9._-]/','_',basename(end($parts))); $parts[count($parts)-1]=$fileName; $path=safeStoragePath(implode('/',$parts)); $target=STORAGE_ROOT.'/'.$path; if(!is_dir(dirname($target)) && !mkdir(dirname($target),0700,true)) out(['error'=>'Could not create storage directory'],500); if(!move_uploaded_file($_FILES['file']['tmp_name'],$target)) out(['error'=>'Could not save file'],500); out(['data'=>['path'=>$path]]); }
 if ($action==='logout') { session_destroy(); out(['data'=>true]); }
-if ($action==='admin_recovery') {
-  $staffId=strtoupper(trim((string)($input['staff_id']??'')));
-  $secret=(string)($input['secret']??'');
-  if (!defined('ADMIN_RECOVERY_SECRET') || ADMIN_RECOVERY_SECRET==='' || !hash_equals(ADMIN_RECOVERY_SECRET, $secret)) out(['error'=>'Recovery details were not accepted'],422);
-  if (!preg_match('/^[A-Z0-9-]{2,50}$/', $staffId)) out(['error'=>'Enter a valid staff ID'],422);
-  $temporaryPassword='EduVault-'.bin2hex(random_bytes(5)).'!';
-  $s=$pdo->prepare("UPDATE profiles SET password_hash=?, is_active=1 WHERE staff_id=? AND role='admin'");
-  $s->execute([password_hash($temporaryPassword,PASSWORD_DEFAULT),$staffId]);
-  if ($s->rowCount()!==1) out(['error'=>'Recovery details were not accepted'],422);
-  out(['data'=>['staff_id'=>$staffId,'temporary_password'=>$temporaryPassword]]);
-}
 if ($action==='delete_file') { requireAuth('admin'); foreach (($input['paths']??[]) as $path) { $file=STORAGE_ROOT.'/'.safeStoragePath((string)$path); if (is_file($file)) unlink($file); } out(['data'=>true]); }
 if ($action==='reset_teacher_password') { requireAuth('admin'); $teacherId=(string)($input['teacher_id']??''); $password=(string)($input['password']??''); if ($teacherId==='' || strlen($password)<8) out(['error'=>'A teacher and a password of at least 8 characters are required'],422); $s=$pdo->prepare("UPDATE profiles SET password_hash=? WHERE id=? AND role='teacher'"); $s->execute([password_hash($password,PASSWORD_DEFAULT),$teacherId]); if ($s->rowCount()!==1) out(['error'=>'Teacher account not found'],404); out(['data'=>true]); }
 if ($action==='create_teacher' || $action==='create-teacher') { requireAuth('admin'); $staffId=strtoupper(trim((string)($input['staff_id']??($input['user_metadata']['staff_id']??'')))); $email=trim((string)($input['email']??'')); $password=(string)($input['password']??''); $name=trim((string)($input['full_name']??($input['user_metadata']['full_name']??''))); if(!preg_match('/^[A-Z0-9-]{2,50}$/',$staffId)||!filter_var($email,FILTER_VALIDATE_EMAIL)||strlen($password)<8||$name==='') out(['error'=>'Valid staff ID, email, name, and password (8+ characters) are required'],422); $id=bin2hex(random_bytes(16)); try { $s=$pdo->prepare("INSERT INTO profiles (id,staff_id,email,password_hash,full_name,role,is_active) VALUES (?,?,?,?,?,'teacher',1)"); $s->execute([$id,$staffId,$email,password_hash($password,PASSWORD_DEFAULT),$name]); } catch (PDOException $e) { if ((int)$e->errorInfo[1]===1062) out(['error'=>'That staff ID or email is already registered'],409); throw $e; } out(['data'=>['user'=>['id'=>$id,'email'=>$email,'staff_id'=>$staffId]]]); }

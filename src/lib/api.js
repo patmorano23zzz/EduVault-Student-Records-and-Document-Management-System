@@ -1,8 +1,12 @@
 /* Compatibility facade: the UI keeps its familiar data-access calls while all
  * traffic is handled by the Hostinger PHP API. */
 const API = import.meta.env.VITE_API_URL || '/api/index.php'
-const request = async (path, options = {}) => {
-  const csrf = document.cookie.split('; ').find(value => value.startsWith('csrf='))?.split('=')[1]
+export const apiRequest = async (path, options = {}) => {
+  let csrf = document.cookie.split('; ').find(value => value.startsWith('csrf='))?.split('=')[1]
+  if ((options.method || 'GET').toUpperCase() === 'POST' && !csrf) {
+    await fetch(`${API}?action=session`, { credentials: 'include' })
+    csrf = document.cookie.split('; ').find(value => value.startsWith('csrf='))?.split('=')[1]
+  }
   const headers = { ...(options.headers || {}) }
   if (csrf) headers['X-CSRF-Token'] = csrf
   const response = await fetch(`${API}${path}`, { credentials: 'include', ...options, headers })
@@ -10,6 +14,8 @@ const request = async (path, options = {}) => {
   if (!response.ok || body.error) throw new Error(body.error || 'Request failed')
   return body
 }
+
+const request = apiRequest
 
 class Query {
   constructor(table) { this.table = table; this.params = {}; this.action = 'select' }

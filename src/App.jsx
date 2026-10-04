@@ -22,6 +22,9 @@ import AdminDocuments from './pages/admin/Documents'
 import AdminRequests from './pages/admin/Requests'
 import AdminTeachers from './pages/admin/Teachers'
 import AdminAuditLogs from './pages/admin/AuditLogs'
+import AdminSettings from './pages/admin/Settings'
+import ResetPassword from './pages/auth/ResetPassword'
+import VerifyRecoveryEmail from './pages/auth/VerifyRecoveryEmail'
 
 import TeacherStudents from './pages/teacher/Students'
 import TeacherStudentDetail from './pages/teacher/StudentDetail'
@@ -49,6 +52,8 @@ export default function App() {
                 </Route>
 
                 <Route path="/login" element={<Login />} />
+                <Route path="/reset-password" element={<ResetPassword />} />
+                <Route path="/verify-recovery-email" element={<VerifyRecoveryEmail />} />
 
                 <Route element={<RequireAuth role="admin" />}>
                   <Route element={<AdminLayout />}>
@@ -59,6 +64,7 @@ export default function App() {
                     <Route path="/admin/requests" element={<AdminRequests />} />
                     <Route path="/admin/teachers" element={<AdminTeachers />} />
                     <Route path="/admin/audit-logs" element={<AdminAuditLogs />} />
+                    <Route path="/admin/settings" element={<AdminSettings />} />
                   </Route>
                 </Route>
 

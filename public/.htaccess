@@ -8,5 +8,8 @@ RewriteCond %{REQUEST_FILENAME} -f [OR]
 RewriteCond %{REQUEST_FILENAME} -d
 RewriteRule ^ - [L]
 
+# Missing assets or API files must not be served as the SPA document.
+RewriteRule ^(assets|api)/ - [L]
+
 # Let React Router handle application routes.
 RewriteRule ^ index.html [L]

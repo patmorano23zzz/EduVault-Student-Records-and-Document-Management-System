@@ -14,16 +14,18 @@ frontend locally; Node.js is not required on the hosting account.
    [`database/schema.sql`](./database/schema.sql) from your computer.
 3. Copy `api/config.infinityfree.php.example` to `api/config.local.php` and
    use the exact MySQL host, database name, username, and password shown in
-   the control panel. Set `ADMIN_RECOVERY_SECRET` to a long private phrase
-   before using the login recovery form.
+   the control panel. Set the SMTP and `APP_BASE_URL` values for your site.
    Do not assume the database host is `localhost`.
-4. Run `npm ci` and `npm run build` locally.
+4. Run `npm ci`, `npm run build`, and `composer install --no-dev --optimize-autoloader` locally.
 5. Upload the contents of `dist/` into the account's `htdocs/` directory.
-6. Upload `api/` and `storage/` into `htdocs/`. Keep `storage/.htaccess` in
-   place so uploaded files cannot be opened directly.
+6. Upload `api/` (including its generated `vendor/`) and `storage/` into
+   `htdocs/`. Keep
+   `storage/.htaccess` in place so uploaded files cannot be opened directly.
 7. If the account allows files outside `htdocs/`, move `storage/` there and
    update `STORAGE_ROOT` in `api/config.local.php` to its absolute path.
-8. Open the site using the InfinityFree HTTPS URL and test `/login`,
+8. Configure SMTP and `APP_BASE_URL` in the private server config, then use
+   **Admin → Settings** to set and verify the recovery email.
+9. Open the site using the InfinityFree HTTPS URL and test `/login`,
    `/track-request`, uploads, and downloads.
 
 InfinityFree may show a browser security or verification page on some
@@ -39,15 +41,33 @@ React application.
 3. Put `storage/` outside `public_html` when the plan permits it. If it must
    be inside the web root, keep the included `.htaccess`; downloads still pass
    through `api/index.php` and role checks.
-4. Upload the contents of `dist/` to `public_html/`, then upload `api/` and
-   `storage/`. Do not upload the schema SQL file into the public web root.
-5. Ensure PHP 8.1+, PDO MySQL, sessions, and HTTPS are enabled.
+4. Set the SMTP and `APP_BASE_URL` constants in `api/config.local.php`. Create
+   a Hostinger mailbox for sending mail and use its SMTP host, port, username,
+   and password. Configure the recovery recipient after signing in under
+   **Admin → Settings**; verify that address from the received message.
+5. Run `composer install --no-dev --optimize-autoloader` locally. Upload the
+   contents of `dist/` to `public_html/`, replacing `index.html`, `.htaccess`,
+   and the complete `assets/` directory together. The generated asset names
+   include a deployment suffix to avoid stale CDN/browser caches. Purge the
+   Hostinger cache after replacing the files. Also upload the generated
+   `api/vendor/` directory as part of `api/`, plus `storage/`. Do not upload
+   SQL files into the public web root.
+6. Ensure PHP 8.1+, PDO MySQL, sessions, and HTTPS are enabled.
 
 The schema inserts an initial admin account with staff ID `ADM-001`. Sign in
-with the temporary password provided for this deployment and change it
-immediately. The schema stores only a PHP-compatible password hash; never add
-a plaintext password to the repository or leave SQL files in the public web
-root.
+with the initial password supplied separately for the deployment and change
+it immediately. The schema stores only a PHP-compatible password hash; never
+add a plaintext password to the repository or leave SQL files in the public
+web root.
+
+For an existing database created before email recovery was added, import
+[`database/admin-password-recovery-migration.sql`](./database/admin-password-recovery-migration.sql)
+once in phpMyAdmin. Do not re-import the full schema into a populated database.
+
+Password recovery requires working authenticated SMTP. Set these constants in
+the private `api/config.local.php`: `APP_BASE_URL`, `SMTP_HOST`, `SMTP_PORT`,
+`SMTP_USER`, `SMTP_PASS`, `SMTP_SECURE`, `SMTP_FROM_EMAIL`, and `SMTP_FROM_NAME`.
+Never place SMTP credentials in frontend settings or source control.
 
 ## Build
 
